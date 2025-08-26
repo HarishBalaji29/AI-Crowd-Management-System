@@ -1,0 +1,183 @@
+# app.py
+# Main application for the AI-Based CCTV Network for Crowd Management with Gemini Integration
+
+import cv2
+import numpy as np
+from flask import Flask, render_template, Response, jsonify, request
+import time
+import json
+
+# Initialize the Flask application
+app = Flask(__name__)
+
+# --- Configuration ---
+# Load the pre-trained MobileNet SSD model for person detection
+PROTOTXT = "MobileNetSSD_deploy.prototxt.txt"
+MODEL = "MobileNetSSD_deploy.caffemodel"
+net = cv2.dnn.readNetFromCaffe(PROTOTXT, MODEL)
+
+# Confidence threshold for detections
+CONFIDENCE_THRESHOLD = 0.4
+
+# Define the classes the model can detect. We are only interested in 'person'.
+CLASSES = ["background", "aeroplane", "bicycle", "bird", "boat",
+           "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
+           "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
+           "sofa", "train", "tvmonitor"]
+
+# --- Global State for Status ---
+# This dictionary will hold the latest analysis results to be accessed by different routes.
+# This is a simple approach for this example. In a production app, you might use a more robust state management solution.
+app_status = {
+    "person_count": 0,
+    "density_level": "Low",
+    "last_updated": time.time()
+}
+
+# --- Crowd Density Logic ---
+def analyze_frame(frame):
+    """
+    Analyzes a single video frame to detect people and estimate crowd density.
+    Updates the global app_status.
+
+    Args:
+        frame: The input video frame (a NumPy array).
+
+    Returns:
+        The processed frame with bounding boxes and density info.
+    """
+    global app_status
+    (h, w) = frame.shape[:2]
+    blob = cv2.dnn.blobFromImage(cv2.resize(frame, (300, 300)), 0.007843, (300, 300), 127.5)
+
+    net.setInput(blob)
+    detections = net.forward()
+    person_count = 0
+
+    for i in np.arange(0, detections.shape[2]):
+        confidence = detections[0, 0, i, 2]
+        if confidence > CONFIDENCE_THRESHOLD:
+            idx = int(detections[0, 0, i, 1])
+            if CLASSES[idx] == "person":
+                person_count += 1
+                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                (startX, startY, endX, endY) = box.astype("int")
+                cv2.rectangle(frame, (startX, startY), (endX, endY), (0, 255, 0), 2)
+
+    # Determine the crowd density level
+    if person_count < 5:
+        density_level = "Low"
+        color = (0, 255, 0)
+    elif person_count < 10:
+        density_level = "Medium"
+        color = (0, 255, 255)
+    else:
+        density_level = "High"
+        color = (0, 0, 255)
+
+    # Update global status
+    app_status['person_count'] = person_count
+    app_status['density_level'] = density_level
+    app_status['last_updated'] = time.time()
+
+    # Display info on the frame
+    cv2.putText(frame, f"Person Count: {person_count}", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    cv2.putText(frame, f"Density: {density_level}", (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+    return frame
+
+def generate_frames():
+    """Generator function for video streaming."""
+    camera = cv2.VideoCapture(0)
+    if not camera.isOpened():
+        print("Error: Could not open video stream.")
+        return
+
+    while True:
+        success, frame = camera.read()
+        if not success:
+            break
+        else:
+            processed_frame = analyze_frame(frame)
+            ret, buffer = cv2.imencode('.jpg', processed_frame)
+            frame_bytes = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+    camera.release()
+
+# --- Flask Routes ---
+@app.route('/')
+def index():
+    """Render the main web page."""
+    return render_template('index.html')
+
+@app.route('/video_feed')
+def video_feed():
+    """Video streaming route."""
+    return Response(generate_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/status')
+def status():
+    """Endpoint to get the current crowd status."""
+    return jsonify(app_status)
+
+@app.route('/generate_protocol', methods=['POST'])
+def generate_protocol():
+    """
+    Endpoint to generate a safety protocol using the Gemini API.
+    """
+    data = request.get_json()
+    person_count = data.get('person_count', 0)
+
+    prompt = f"""
+    You are a security and safety expert. A CCTV system has detected a high-density crowd of approximately {person_count} people in a public area.
+    Generate a concise, clear, and actionable safety protocol for on-ground security personnel.
+    The protocol should be formatted in Markdown and include the following sections:
+    1.  **Immediate Actions:** 3-4 critical first steps.
+    2.  **Communication Protocol:** Who to contact and what to report.
+    3.  **Crowd Management Techniques:** 2-3 specific techniques to de-escalate the situation.
+    4.  **Emergency Preparedness:** Key reminders for potential evacuation or medical needs.
+    """
+
+    # NOTE: In a real environment, the API key should be stored securely and not be empty.
+    # The Canvas environment handles API key injection automatically when it is an empty string.
+    api_key = "" 
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    
+    payload = {
+        "contents": [{
+            "parts": [{
+                "text": prompt
+            }]
+        }]
+    }
+    
+    headers = {'Content-Type': 'application/json'}
+
+    try:
+        response = requests.post(api_url, headers=headers, data=json.dumps(payload), timeout=30)
+        response.raise_for_status() # Raise an exception for bad status codes
+        result = response.json()
+        
+        if (result.get('candidates') and result['candidates'][0].get('content') and 
+            result['candidates'][0]['content'].get('parts') and result['candidates'][0]['content']['parts'][0].get('text')):
+            
+            generated_text = result['candidates'][0]['content']['parts'][0]['text']
+            return jsonify({'protocol': generated_text})
+        else:
+            # Handle cases where the response structure is unexpected
+            error_message = "Error: Could not parse the response from the Gemini API."
+            if result.get('promptFeedback'):
+                error_message += f" Reason: {result['promptFeedback'].get('blockReason')}"
+            return jsonify({'error': error_message}), 500
+
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f"API request failed: {e}"}), 500
+
+
+# --- Main Execution ---
+if __name__ == '__main__':
+    app.run(debug=True)
