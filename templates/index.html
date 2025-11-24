@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Crowd Management Live Feed</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background-color: #f0f2f5;
+      color: #333;
+    }
+
+    h1 {
+      text-align: center;
+      margin: 6px 0 24px;
+      color: #2c3e50;
+      font-weight: 600;
+    }
+
+    /* New layout: two-column responsive row */
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: flex;
+      gap: 24px;
+      align-items: flex-start;
+      padding: 0 16px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.06);
+      padding: 16px;
+    }
+
+    .video-card {
+      flex: 1 1 640px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      align-items: center;
+    }
+
+    #video {
+      width: 100%;
+      max-width: 640px;
+      height: auto;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      background: #000;
+      display: block;
+    }
+
+    .info-card {
+      flex: 0 0 360px;
+      width: 360px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .info-row p {
+      margin: 0;
+      font-size: 15px;
+      color: #2d3a46;
+    }
+
+    #gen {
+      display: block;
+      width: 100%;
+      padding: 12px;
+      font-size: 15px;
+      background-color: #3498db;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background-color 0.18s ease;
+      box-shadow: 0 4px 8px rgba(52,152,219,0.12);
+    }
+    #gen:hover { background-color: #2b86c8; }
+
+    h3 {
+      margin: 8px 0 0;
+      font-size: 16px;
+      color: #34495e;
+    }
+
+    #protocol {
+      white-space: pre-wrap;
+      background: #f7fbff;
+      padding: 12px;
+      border-radius: 6px;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 14px;
+      margin-top: 6px;
+      min-height: 80px;
+      color: #2b3a42;
+      border: 1px solid rgba(43,62,72,0.06);
+    }
+
+    /* Responsive: stack on small screens */
+    @media (max-width: 900px) {
+      .container { flex-direction: column; gap: 18px; }
+      .info-card { width: 100%; flex: 1 1 auto; }
+      .video-card { flex: 1 1 auto; }
+    }
+  </style>
+</head>
+<body id="body">
+  <h1>Crowd Management — Live Feed</h1>
+
+  <div class="container">
+    <div class="card video-card">
+      <img id="video" src="/video_feed" alt="Live video feed" />
+      <!-- optional caption or controls could go here -->
+    </div>
+
+    <div class="card info-card">
+      <div class="info-row">
+        <p><strong>Person count:</strong> <span id="person_count">-</span></p>
+        <p><strong>Density:</strong> <span id="density">-</span></p>
+      </div>
+
+      <div>
+        <button id="gen">Generate Safety Protocol</button>
+      </div>
+
+      <h3>Generated Protocol</h3>
+      <pre id="protocol">(click "Generate Safety Protocol")</pre>
+    </div>
+  </div>
+
+  <script>
+    async function updateStatus() {
+      try {
+        const res = await fetch('/status');
+        const j = await res.json();
+        document.getElementById('person_count').textContent = j.person_count ?? '-';
+        document.getElementById('density').textContent = j.density_level ?? '-';
+      } catch (e) {
+        console.error('Failed to fetch status', e);
+      }
+    }
+
+    setInterval(updateStatus, 2000);
+    updateStatus();
+
+    document.getElementById('gen').addEventListener('click', async () => {
+      const person_count = parseInt(document.getElementById('person_count').textContent) || 0;
+      try {
+        const resp = await fetch('/generate_protocol', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ person_count })
+        });
+        const data = await resp.json();
+        document.getElementById('protocol').textContent = data.protocol || data.error || JSON.stringify(data, null, 2);
+      } catch (e) {
+        document.getElementById('protocol').textContent = 'Request failed: ' + e;
+      }
+    });
+  </script>
+</body>
+</html>

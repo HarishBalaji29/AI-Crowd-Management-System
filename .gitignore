@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and databases
+*.log
+*.sqlite3
+*.db
+
+# Media / outputs (video/images generated during testing)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.jpg
+*.jpeg
+*.png
+
+# Local secrets / keys
+.env
+gen_api_key.txt
+
+# Large model / weights (Caffe, TensorFlow, PyTorch)
+*.caffemodel
+*.pb
+*.onnx
+models/
+weights/
+
+# Python packaging
+pip-wheel-metadata/
+*.egg
+*.whl
+
+# Misc
+coverage.xml
+htmlcov/
+pytest_cache/

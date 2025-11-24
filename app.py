@@ -3,17 +3,36 @@
 
 import cv2
 import numpy as np
+import os
 from flask import Flask, render_template, Response, jsonify, request
 import time
 import json
+import requests
+# Optional dotenv support: try to import python-dotenv, otherwise provide a noop for load_dotenv
+try:
+    from dotenv import load_dotenv  # type: ignore
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        # dotenv is optional; environment variables can be set in the environment instead.
+        return None
 
 # Initialize the Flask application
 app = Flask(__name__)
 
+# load environment variables from .env (if present)
+load_dotenv()
+
 # --- Configuration ---
 # Load the pre-trained MobileNet SSD model for person detection
-PROTOTXT = "MobileNetSSD_deploy.prototxt.txt"
-MODEL = "MobileNetSSD_deploy.caffemodel"
+PROTOTXT = "deploy.prototxt"
+MODEL = "Caffe model file.caffemodel"
+
+# Validate model files exist to give a clearer error if they are missing
+if not os.path.exists(PROTOTXT):
+    raise FileNotFoundError(f"Prototxt file not found: {PROTOTXT}")
+if not os.path.exists(MODEL):
+    raise FileNotFoundError(f"Model file not found: {MODEL}")
+
 net = cv2.dnn.readNetFromCaffe(PROTOTXT, MODEL)
 
 # Confidence threshold for detections
@@ -142,9 +161,47 @@ def generate_protocol():
     4.  **Emergency Preparedness:** Key reminders for potential evacuation or medical needs.
     """
 
-    # NOTE: In a real environment, the API key should be stored securely and not be empty.
-    # The Canvas environment handles API key injection automatically when it is an empty string.
-    api_key = "" 
+    # Read API key from environment variable `GEN_API_KEY` and optional mock mode `MOCK_GEMINI`.
+    api_key = os.getenv('GEN_API_KEY')
+    # sanitize: remove accidental surrounding quotes and whitespace
+    if api_key:
+        api_key = api_key.strip()
+        if (api_key.startswith('"') and api_key.endswith('"')) or (api_key.startswith("'") and api_key.endswith("'")):
+            api_key = api_key[1:-1].strip()
+    mock_mode = os.getenv('MOCK_GEMINI', 'false').lower() in ('1', 'true', 'yes')
+     # Allow forcing mock output via the request body: {"mock": true}
+    force_mock = bool(data.get('mock', False))
+    # quick placeholder detection to avoid sending invalid keys
+    if api_key and ('your_real' in api_key.lower() or 'replace' in api_key.lower() or len(api_key) < 10):
+        # treat as missing/invalid key for guidance
+        api_key = None
+
+    # A small canned protocol used when mock mode is enabled for local development/testing.
+    canned_protocol = (
+        "### Immediate Actions:\n"
+        "1. Secure the perimeter and assign staff to form clear ingress/egress paths.\n"
+        "2. Call local law enforcement if crowd exceeds safe thresholds.\n"
+        "3. Begin staged, calm announcements to guide people to less crowded areas.\n\n"
+        "### Communication Protocol:\n"
+        "- Notify on-site supervisor and control room immediately.\n"
+        "- Report estimated person count, location, and any injuries.\n\n"
+        "### Crowd Management Techniques:\n"
+        "- Use clear, calm public address instructions to direct flows.\n"
+        "- Open additional exits and direct flow to alternate routes.\n\n"
+        "### Emergency Preparedness:\n"
+        "- Prepare medical teams and designate evacuation zones.\n"
+        "- Keep clear channels for emergency responders.\n"
+    )
+
+    # If no key, allow mock modes (env, local file fallback already tried, or request mock)
+    if not api_key:
+        # Allow mock via env, request, or automatic fallback in debug/local development.
+        if mock_mode or force_mock or app.debug:
+            return jsonify({'protocol': canned_protocol})
+        return jsonify({
+            'error': "Gemini API key not configured. Set GEN_API_KEY in a .env file or environment, enable MOCK_GEMINI, or send {\"mock\": true}."
+        }), 400
+
     api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     
     payload = {
@@ -159,7 +216,26 @@ def generate_protocol():
 
     try:
         response = requests.post(api_url, headers=headers, data=json.dumps(payload), timeout=30)
-        response.raise_for_status() # Raise an exception for bad status codes
+        try:
+            response.raise_for_status() # Raise an exception for bad status codes
+        except requests.exceptions.HTTPError:
+            status = response.status_code
+            # Special guidance for 403 Forbidden
+            if status == 403:
+                if mock_mode or app.debug:
+                    return jsonify({'protocol': canned_protocol})
+                # Provide actionable guidance without leaking details
+                return jsonify({
+                    'error': 'API request returned 403 Forbidden.',
+                    'help': [
+                        'Confirm GEN_API_KEY is correct (no surrounding quotes) and not a placeholder.',
+                        'Ensure the Generative Language API (Generative) is enabled in your Google Cloud project.',
+                        'Verify billing is enabled for the project and the key is unrestricted or allows this request origin.',
+                        'Check key restrictions (HTTP referrer / IP / service restrictions) and remove them for testing.'
+                    ]
+                }), 403
+            return jsonify({'error': f'API request failed with status {status}: {response.text}'}), status
+
         result = response.json()
         
         if (result.get('candidates') and result['candidates'][0].get('content') and 
